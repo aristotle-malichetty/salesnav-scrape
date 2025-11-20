@@ -5,13 +5,17 @@ console.log('✅ Sales Nav Scraper Extension Loaded!');
 
 let isScrapingActive = false;
 let scrapedLeads = [];
+let scrapedUrls = new Set(); // Track unique leads by URL
 
 // ==================== CONFIGURATION ====================
 const CONFIG = {
-  DELAY_BETWEEN_PAGES: 3000,  // 3 seconds between pages
-  DELAY_BETWEEN_LEADS: 500,    // 0.5 seconds between processing leads
-  MAX_RETRIES: 3,
-  WAIT_FOR_LOAD_TIMEOUT: 10000 // 10 seconds max wait
+  // Random delays to appear human-like
+  DELAY_BETWEEN_PAGES: { min: 2500, max: 4500 },      // 2.5-4.5 seconds between pages
+  SCROLL_DELAY: { min: 1200, max: 2000 },             // 1.2-2 seconds between scrolls
+  
+  WAIT_FOR_LOAD_TIMEOUT: 15000,                       // 15 seconds max wait
+  MAX_SCROLL_ATTEMPTS: 10,                            // Max times to scroll to load leads
+  STORAGE_KEY: 'linkedinScraperState'
 };
 
 // ==================== INITIALIZE ====================
@@ -20,12 +24,90 @@ function init() {
   if (window.location.href.includes('linkedin.com/sales/search')) {
     console.log('📍 Detected Sales Nav search page');
     
+    // Check if there's an active scraping session
+    checkAndResumeScraping();
+    
     // Wait for page to fully load before injecting button
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', injectScrapeButton);
     } else {
       setTimeout(injectScrapeButton, 1500);
     }
+  }
+}
+
+// ==================== CHECK AND RESUME SCRAPING ====================
+function checkAndResumeScraping() {
+  const state = getScrapeState();
+  
+  if (state && state.isActive) {
+    console.log('🔄 ========================================');
+    console.log('🔄 RESUMING SCRAPING SESSION');
+    console.log(`📊 Progress: ${state.leads.length} leads from ${state.pagesScraped} pages`);
+    console.log('🔄 ========================================\n');
+    
+    // Restore state
+    isScrapingActive = true;
+    scrapedLeads = state.leads || [];
+    scrapedUrls = new Set(state.urls || []);
+    
+    // Update button to show scraping is active
+    updateButtonState(`⏳ Resuming... ${scrapedLeads.length} leads`, true);
+    
+    // Wait random time for page to fully load before continuing (more human-like)
+    const resumeDelay = Math.floor(Math.random() * (4000 - 2500 + 1)) + 2500; // 2.5-4s
+    setTimeout(() => {
+      continueScraping();
+    }, resumeDelay);
+  }
+}
+
+// ==================== SAVE SCRAPE STATE ====================
+function saveScrapeState(isActive, leads, urls, pagesScraped) {
+  const state = {
+    isActive: isActive,
+    leads: leads,
+    urls: Array.from(urls),
+    pagesScraped: pagesScraped,
+    timestamp: Date.now()
+  };
+  
+  try {
+    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.error('Failed to save scrape state:', error);
+  }
+}
+
+// ==================== GET SCRAPE STATE ====================
+function getScrapeState() {
+  try {
+    const stateStr = localStorage.getItem(CONFIG.STORAGE_KEY);
+    if (stateStr) {
+      const state = JSON.parse(stateStr);
+      
+      // Check if state is not too old (expired after 1 hour)
+      const isExpired = (Date.now() - state.timestamp) > 3600000;
+      if (isExpired) {
+        console.log('⏰ Scraping session expired');
+        clearScrapeState();
+        return null;
+      }
+      
+      return state;
+    }
+  } catch (error) {
+    console.error('Failed to get scrape state:', error);
+  }
+  return null;
+}
+
+// ==================== CLEAR SCRAPE STATE ====================
+function clearScrapeState() {
+  try {
+    localStorage.removeItem(CONFIG.STORAGE_KEY);
+  } catch (error) {
+    console.error('Failed to clear scrape state:', error);
   }
 }
 
@@ -37,20 +119,10 @@ function injectScrapeButton() {
     return;
   }
   
-  // Find a good place to inject the button
-  // Try multiple possible locations
-  const possibleLocations = [
-    document.querySelector('.search-results__header'),
-    document.querySelector('.search-results-container__header'),
-    document.querySelector('[class*="search-results"]'),
-    document.querySelector('header'),
-  ];
-
-  const targetLocation = possibleLocations.find(el => el !== null);
-  
-  if (!targetLocation) {
-    console.warn('⚠️ Could not find location to inject button. Retrying...');
-    setTimeout(injectScrapeButton, 2000);
+  // Wait for body to be ready
+  if (!document.body) {
+    console.warn('⚠️ Body not ready, retrying...');
+    setTimeout(injectScrapeButton, 500);
     return;
   }
 
@@ -59,12 +131,34 @@ function injectScrapeButton() {
   button.id = 'scraper-button';
   button.className = 'scraper-button';
   button.innerHTML = '📥 Scrape Leads to CSV';
-  button.onclick = startScraping;
+  button.onclick = handleButtonClick;
   
-  targetLocation.style.position = 'relative';
-  targetLocation.appendChild(button);
+  // Append to body (using fixed positioning in CSS)
+  document.body.appendChild(button);
   
   console.log('✅ Scrape button injected successfully');
+  console.log('📍 Button should be visible at top-right corner');
+}
+
+// ==================== HANDLE BUTTON CLICK ====================
+function handleButtonClick() {
+  if (isScrapingActive) {
+    // Allow cancellation
+    const confirmed = confirm(
+      '⚠️ Scraping is in progress.\n\n' +
+      `Currently scraped: ${scrapedLeads.length} leads\n\n` +
+      'Do you want to:\n' +
+      '• Cancel and export current data? Click OK\n' +
+      '• Continue scraping? Click Cancel'
+    );
+    
+    if (confirmed) {
+      console.log('🛑 User cancelled scraping');
+      finishScraping();
+    }
+  } else {
+    startScraping();
+  }
 }
 
 // ==================== START SCRAPING ====================
@@ -77,169 +171,329 @@ async function startScraping() {
   const confirmed = confirm(
     '🚀 Start scraping leads from this Sales Navigator search?\n\n' +
     'This will:\n' +
-    '• Scrape all visible lead data\n' +
+    '• Scroll to load ALL leads on each page\n' +
+    '• Scrape all visible lead data (fast mode)\n' +
     '• Handle pagination automatically\n' +
+    '• Skip duplicates across pages\n' +
     '• Export to CSV when complete\n\n' +
-    'Keep this tab open during scraping.'
+    '⚡ Fast scraping: ~5-10s per page (no clicking profiles)\n\n' +
+    '⚠️ Keep this tab open during scraping\n' +
+    '⚠️ Don\'t navigate away from this page'
   );
   
   if (!confirmed) return;
 
   isScrapingActive = true;
   scrapedLeads = [];
+  scrapedUrls = new Set();
+  
+  // Clear any old state
+  clearScrapeState();
+  
+  console.log('\n🚀 ========================================');
+  console.log('🚀 STARTING NEW SCRAPING SESSION');
+  console.log(`🔧 Mode: FAST (no profile clicking)`);
+  console.log(`🔧 Deduplication: ENABLED`);
+  console.log(`🔧 Random delays: ENABLED`);
+  console.log('🚀 ========================================\n');
   
   updateButtonState('⏳ Initializing... 0 leads', true);
   
+  await continueScraping();
+}
+
+// ==================== CONTINUE SCRAPING ====================
+async function continueScraping() {
   try {
-    await scrapeAllPages();
+    const urlParams = new URLSearchParams(window.location.search);
+    const currentPage = parseInt(urlParams.get('page')) || 1;
     
-    if (scrapedLeads.length > 0) {
-      exportToCSV(scrapedLeads);
-      alert(`✅ Successfully scraped ${scrapedLeads.length} leads!\n\nCSV file downloaded.`);
+    console.log(`\n📄 ========================================`);
+    console.log(`📄 === SCRAPING PAGE ${currentPage} ===`);
+    console.log(`📄 ========================================\n`);
+    
+    // Wait for leads to load (with random delay)
+    await waitForLeadsToLoad();
+    
+    // Scroll to load ALL leads (with random delays between scrolls)
+    await scrollToLoadAllLeads();
+    
+    // Random delay to ensure DOM is stable (human-like pause before scraping)
+    await randomDelay({ min: 800, max: 1500 });
+    
+    // Scrape current page (this now includes deep scraping if enabled)
+    const leadsOnPage = await scrapeCurrentPage();
+    
+    const newLeadsCount = scrapedLeads.length;
+    console.log(`\n✅ Page ${currentPage} complete!`);
+    console.log(`   📊 Total unique leads: ${scrapedLeads.length}`);
+    console.log(`   📄 Pages scraped: ${currentPage}\n`);
+    
+    updateButtonState(
+      `⏳ Scraping... ${scrapedLeads.length} leads (Page ${currentPage})`, 
+      true
+    );
+    
+    // Check if there's a next page
+    const hasNextPage = await checkNextPage();
+    
+    if (hasNextPage) {
+      // Save state before navigating
+      saveScrapeState(true, scrapedLeads, scrapedUrls, currentPage);
+      
+      // Random delay between pages (appears more human)
+      const pageDelay = CONFIG.DELAY_BETWEEN_PAGES;
+      console.log(`⏭️  Waiting before next page...`);
+      await randomDelay(pageDelay);
+      
+      console.log(`🔗 Navigating to page ${currentPage + 1}...\n`);
+      
+      // Navigate to next page
+      await goToNextPage();
+      // Page will reload and resume automatically
     } else {
-      alert('⚠️ No leads found. LinkedIn may have changed their structure.');
+      // Scraping complete
+      console.log('✅ No more pages to scrape');
+      finishScraping();
     }
+    
   } catch (error) {
     console.error('❌ Scraping error:', error);
     alert('❌ Error during scraping:\n' + error.message + '\n\nCheck console for details.');
-  } finally {
-    isScrapingActive = false;
-    updateButtonState('📥 Scrape Leads to CSV', false);
+    finishScraping();
   }
 }
 
-// ==================== SCRAPE ALL PAGES ====================
-async function scrapeAllPages() {
-  // Get current page from URL
-  const urlParams = new URLSearchParams(window.location.search);
-  let currentPage = parseInt(urlParams.get('page')) || 1;
-  let hasMorePages = true;
-  let consecutiveFailures = 0;
+// ==================== FINISH SCRAPING ====================
+function finishScraping() {
+  clearScrapeState();
+  isScrapingActive = false;
+  
+  if (scrapedLeads.length > 0) {
+    exportToCSV(scrapedLeads);
+    alert(`✅ Successfully scraped ${scrapedLeads.length} unique leads!\n\nCSV file downloaded.`);
+  } else {
+    alert('⚠️ No leads found. LinkedIn may have changed their structure.');
+  }
+  
+  updateButtonState('📥 Scrape Leads to CSV', false);
+}
 
-  while (hasMorePages && consecutiveFailures < CONFIG.MAX_RETRIES) {
-    console.log(`\n📄 === Scraping Page ${currentPage} ===`);
-    
-    try {
-      // Wait for leads to load
-      await waitForLeadsToLoad();
-      
-      // Optional: Scroll to load lazy-loaded content
-      await scrollToLoadAllLeads();
-      
-      // Scrape current page
-      const leadsOnPage = scrapeCurrentPage();
-      
-      if (leadsOnPage.length === 0) {
-        console.warn(`⚠️ No leads found on page ${currentPage}`);
-        consecutiveFailures++;
-      } else {
-        console.log(`✅ Scraped ${leadsOnPage.length} leads from page ${currentPage}`);
-        scrapedLeads.push(...leadsOnPage);
-        consecutiveFailures = 0; // Reset on success
-      }
-      
-      updateButtonState(
-        `⏳ Scraping... ${scrapedLeads.length} leads (Page ${currentPage})`, 
-        true
-      );
-      
-      // Check if there's a next page and navigate
-      hasMorePages = await goToNextPage();
-      
-      if (hasMorePages) {
-        currentPage++;
-        console.log(`⏭️ Navigating to page ${currentPage}...`);
-        // URL navigation will reload the page, so we exit here
-        // The script will restart on the new page
-        return;
-      } else {
-        console.log('✅ No more pages to scrape');
-      }
-      
-    } catch (error) {
-      console.error(`❌ Error on page ${currentPage}:`, error);
-      consecutiveFailures++;
-      
-      if (consecutiveFailures >= CONFIG.MAX_RETRIES) {
-        break;
-      }
+// ==================== CHECK NEXT PAGE ====================
+function checkNextPage() {
+  return new Promise((resolve) => {
+    // Check if Next button exists and is enabled
+    const nextButton = document.querySelector('button[aria-label="Next"]') ||
+                       document.querySelector('button.artdeco-pagination__button--next') ||
+                       Array.from(document.querySelectorAll('button')).find(btn => {
+                         const text = btn.textContent.toLowerCase().trim();
+                         return text === 'next' || text.includes('next');
+                       });
+
+    if (!nextButton) {
+      console.log('❌ No "Next" button found - reached last page');
+      resolve(false);
+      return;
     }
-  }
-  
-  if (consecutiveFailures >= CONFIG.MAX_RETRIES) {
-    console.warn('⚠️ Stopped scraping due to consecutive failures');
-  }
-  
-  console.log(`\n🎉 Scraping complete! Total leads: ${scrapedLeads.length}`);
+
+    // Check if button is disabled (last page)
+    const isDisabled = nextButton.disabled || 
+                      nextButton.classList.contains('disabled') ||
+                      nextButton.getAttribute('aria-disabled') === 'true' ||
+                      nextButton.hasAttribute('disabled');
+
+    if (isDisabled) {
+      console.log('❌ "Next" button is disabled - reached last page');
+      resolve(false);
+      return;
+    }
+
+    console.log('✅ Next button available and enabled');
+    resolve(true);
+  });
 }
 
-// ==================== SCROLL TO LOAD ALL LEADS ====================
-async function scrollToLoadAllLeads() {
-  // Find the scrollable container for leads
-  const containers = Array.from(document.querySelectorAll('div[class*="scaffold"], div[class*="search-results"]'));
+// ==================== FIND LEADS CONTAINER ====================
+function findLeadsContainer() {
+  // Look for common Sales Navigator container classes
+  // The leads are usually in a scrollable div with overflow
+  const containers = Array.from(document.querySelectorAll('div[class*="scaffold"]'));
   
   for (const container of containers) {
     const style = window.getComputedStyle(container);
     if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
       // Check if it contains lead items
       if (container.querySelector('[data-anonymize="person-name"]') || 
+          container.querySelector('[class*="artdeco-list"]') ||
           container.querySelector('li.artdeco-list__item')) {
-        
-        console.log('📜 Found scrollable leads container, scrolling to load all...');
-        
-        // Scroll to bottom to trigger lazy loading
-        const initialHeight = container.scrollHeight;
-        container.scrollTop = container.scrollHeight;
-        
-        // Wait for potential lazy load
-        await delay(1000);
-        
-        const newHeight = container.scrollHeight;
-        if (newHeight > initialHeight) {
-          console.log(`✅ Loaded more content (${initialHeight}px → ${newHeight}px)`);
-        }
-        
-        // Scroll back to top for consistent scraping
-        container.scrollTop = 0;
-        await delay(500);
-        
-        return;
+        return container;
       }
     }
   }
   
-  console.log('📜 No scrollable container found or not needed');
+  // Fallback: find any scrollable div that's tall enough
+  const scrollableDivs = Array.from(document.querySelectorAll('div'));
+  return scrollableDivs.find(div => {
+    const style = window.getComputedStyle(div);
+    return (style.overflowY === 'auto' || style.overflowY === 'scroll') && 
+           div.scrollHeight > div.clientHeight + 100;
+  });
+}
+
+// ==================== SCROLL TO LOAD ALL LEADS ====================
+async function scrollToLoadAllLeads() {
+  const container = findLeadsContainer();
+  
+  if (!container) {
+    console.log('📜 No scrollable container found, trying window scroll...');
+    // Fallback: try scrolling the window
+    const initialCount = document.querySelectorAll('[data-anonymize="person-name"]').length;
+    window.scrollTo(0, document.body.scrollHeight);
+    await randomDelay(CONFIG.SCROLL_DELAY);
+    const afterCount = document.querySelectorAll('[data-anonymize="person-name"]').length;
+    
+    if (afterCount > initialCount) {
+      console.log(`✅ Window scroll loaded ${afterCount - initialCount} more leads`);
+    }
+    window.scrollTo(0, 0);
+    return;
+  }
+  
+  console.log('📜 Found scrollable leads container, loading all leads...');
+  
+  let previousLeadCount = 0;
+  let currentLeadCount = 0;
+  let scrollAttempts = 0;
+  let noChangeCount = 0;
+  
+  // Keep scrolling until no new leads appear
+  while (scrollAttempts < CONFIG.MAX_SCROLL_ATTEMPTS) {
+    // Count current leads
+    const leadElements = container.querySelectorAll('[data-anonymize="person-name"]');
+    currentLeadCount = leadElements.length;
+    
+    console.log(`📜 Scroll ${scrollAttempts + 1}/${CONFIG.MAX_SCROLL_ATTEMPTS}: ${currentLeadCount} leads visible`);
+    
+    // Check if we got new leads
+    if (currentLeadCount === previousLeadCount) {
+      noChangeCount++;
+      // If no change for 2 consecutive scrolls, we're done
+      if (noChangeCount >= 2) {
+        console.log(`✅ All leads loaded! Total: ${currentLeadCount} leads`);
+        break;
+      }
+    } else {
+      noChangeCount = 0; // Reset counter when we see changes
+      console.log(`   ↗️ Loaded ${currentLeadCount - previousLeadCount} more leads`);
+    }
+    
+    previousLeadCount = currentLeadCount;
+    
+    // Scroll to bottom gradually (more natural, human-like)
+    const scrollStep = container.scrollHeight / 3;
+    container.scrollTop += scrollStep;
+    await randomDelay({ min: 200, max: 400 }); // Small random delay mid-scroll
+    container.scrollTop = container.scrollHeight;
+    
+    // Wait for lazy loading with random delay
+    await randomDelay(CONFIG.SCROLL_DELAY);
+    
+    scrollAttempts++;
+  }
+  
+  if (scrollAttempts >= CONFIG.MAX_SCROLL_ATTEMPTS) {
+    console.log('⚠️ Max scroll attempts reached');
+  }
+  
+  // Scroll back to top for consistent scraping
+  container.scrollTop = 0;
+  await randomDelay({ min: 400, max: 700 });
+  
+  console.log(`📊 Ready to scrape ${currentLeadCount} leads from this page`);
+}
+
+// ==================== CONVERT SALES NAV URL TO LINKEDIN URL ====================
+// Attempt to extract LinkedIn profile ID from Sales Nav URL and construct LinkedIn URL
+// This is not 100% reliable but works for many cases
+function tryConvertSalesNavToLinkedInURL(salesNavURL) {
+  if (!salesNavURL) return '';
+  
+  try {
+    // Sales Nav URL format: /sales/lead/ACwAAAgkwt4BlnVeqPMXW3YqZ7veNwwua--u7WM,NAME_SEARCH,PClu
+    // Try to extract the encoded ID
+    const match = salesNavURL.match(/\/sales\/lead\/([^,\?]+)/);
+    if (match && match[1]) {
+      // The ID in Sales Nav can sometimes map to LinkedIn, but it's encoded
+      // For now, we return empty since we can't reliably convert without API
+      // LinkedIn would need to be clicked or enriched via API
+      return '';
+    }
+  } catch (error) {
+    console.error('Error converting URL:', error);
+  }
+  
+  return '';
 }
 
 // ==================== SCRAPE CURRENT PAGE ====================
-function scrapeCurrentPage() {
-  const leads = [];
+async function scrapeCurrentPage() {
+  const newLeadsCount = scrapedLeads.length;
   
-  // Try to find lead list items - using multiple selectors
+  // More precise selector - only get direct list items from results
   const leadCards = document.querySelectorAll(
-    'li.artdeco-list__item, ' +
-    'li[class*="search-results"], ' +
-    'div[data-x-search-result], ' +
-    '[class*="search-result-"]'
+    'li.artdeco-list__item:has([data-anonymize="person-name"])'
   );
+  
+  // Fallback if :has selector doesn't work
+  let validCards = Array.from(leadCards);
+  if (validCards.length === 0) {
+    const allItems = document.querySelectorAll('li.artdeco-list__item');
+    validCards = Array.from(allItems).filter(card => 
+      card.querySelector('[data-anonymize="person-name"]')
+    );
+  }
 
-  console.log(`🔍 Found ${leadCards.length} potential lead cards`);
+  console.log(`🔍 Found ${validCards.length} lead cards on page`);
 
-  leadCards.forEach((card, index) => {
+  // Process each lead (no async needed now - fast extraction)
+  for (let index = 0; index < validCards.length; index++) {
+    const card = validCards[index];
+    
     try {
+      // Extract basic data from card (fast, no clicking)
       const lead = extractLeadData(card, index);
       
-      // Only add if we got at least a name
+      // Check if we have a valid lead with at least a name
       if (lead && (lead['Full Name'] || lead['First Name'])) {
-        leads.push(lead);
-        console.log(`  ✓ Lead ${index + 1}: ${lead['Full Name']}`);
+        // Check for duplicates using Sales Navigator URL
+        const leadUrl = lead['Sales Navigator URL'];
+        
+        if (leadUrl && scrapedUrls.has(leadUrl)) {
+          console.log(`  ⊘ Duplicate skipped: ${lead['Full Name']}`);
+          continue;
+        }
+        
+        // Try to convert Sales Nav URL to LinkedIn URL (best effort, no API)
+        // This is left empty for now - would need LinkedIn API or enrichment service
+        // User can enrich later with BetterContact or similar
+        
+        // Add lead to results
+        if (leadUrl) {
+          scrapedUrls.add(leadUrl);
+        }
+        scrapedLeads.push(lead);
+        console.log(`  ✓ Lead ${scrapedLeads.length}: ${lead['Full Name']}`);
+        
       }
     } catch (error) {
       console.error(`  ✗ Error extracting lead ${index + 1}:`, error.message);
     }
-  });
+  }
 
-  return leads;
+  const addedCount = scrapedLeads.length - newLeadsCount;
+  console.log(`📊 Added ${addedCount} new unique leads (${validCards.length - addedCount} duplicates skipped)`);
+  
+  return scrapedLeads;
 }
 
 // ==================== EXTRACT LEAD DATA ====================
@@ -390,47 +644,51 @@ function extractLeadData(card, index) {
 }
 
 // ==================== WAIT FOR LEADS TO LOAD ====================
-function waitForLeadsToLoad() {
+async function waitForLeadsToLoad() {
+  console.log('⏳ Waiting for leads to load...');
+  
+  // First, wait random time for page to settle (human-like)
+  await randomDelay({ min: 1800, max: 2500 });
+  
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
+    let lastLeadCount = 0;
+    let stableCount = 0;
     
     const checkLoaded = () => {
-      // Check if leads are present using multiple selectors
-      const leads = document.querySelectorAll(
-        'li.artdeco-list__item, ' +
-        'li[class*="search-results"], ' +
-        '[data-x--lead-list-item], ' +
-        '[data-anonymize="person-name"]'
-      );
+      // Check if leads are present
+      const leads = document.querySelectorAll('[data-anonymize="person-name"]');
+      const leadCount = leads.length;
       
-      if (leads.length > 0) {
-        console.log(`✅ Found ${leads.length} lead elements on page`);
-        
-        // Also check if "Select all" button is present (indicates page fully loaded)
-        const selectAllBtn = Array.from(document.querySelectorAll('button, span')).find(el =>
-          el.textContent.toLowerCase().includes('select all')
-        );
-        
-        if (selectAllBtn) {
-          console.log('✅ Page fully loaded (Select all button present)');
-          resolve();
-          return;
+      if (leadCount > 0) {
+        // Check if lead count is stable (not still loading)
+        if (leadCount === lastLeadCount) {
+          stableCount++;
+          // If count is stable for 3 checks (1.5 seconds), consider loaded
+          if (stableCount >= 3) {
+            console.log(`✅ Page loaded with ${leadCount} leads visible initially`);
+            resolve();
+            return;
+          }
+        } else {
+          stableCount = 0; // Reset if count changed
+          console.log(`   ⏳ Loading... ${leadCount} leads visible so far`);
         }
+        lastLeadCount = leadCount;
       }
       
       // Check timeout
       if (Date.now() - startTime > CONFIG.WAIT_FOR_LOAD_TIMEOUT) {
-        // If we found some leads but not the button, still proceed
-        if (leads.length > 0) {
-          console.log('⚠️ Timeout reached but leads found, proceeding anyway');
+        if (leadCount > 0) {
+          console.log(`⚠️ Timeout reached with ${leadCount} leads visible, proceeding`);
           resolve();
         } else {
-          reject(new Error('Timeout waiting for leads to load'));
+          reject(new Error('Timeout: No leads found on page'));
         }
         return;
       }
       
-      // Keep checking
+      // Keep checking every 500ms
       setTimeout(checkLoaded, 500);
     };
     
@@ -440,29 +698,7 @@ function waitForLeadsToLoad() {
 
 // ==================== GO TO NEXT PAGE ====================
 async function goToNextPage() {
-  // Check if Next button exists and is enabled (to know if there are more pages)
-  const nextButton = document.querySelector('button[aria-label="Next"]') ||
-                     document.querySelector('button.artdeco-pagination__button--next') ||
-                     Array.from(document.querySelectorAll('button')).find(btn => 
-                       btn.textContent.toLowerCase().includes('next')
-                     );
-
-  if (!nextButton) {
-    console.log('❌ No "Next" button found');
-    return false;
-  }
-
-  // Check if button is disabled (last page)
-  if (nextButton.disabled || 
-      nextButton.classList.contains('disabled') ||
-      nextButton.getAttribute('aria-disabled') === 'true') {
-    console.log('❌ "Next" button is disabled - last page reached');
-    return false;
-  }
-
-  console.log('✅ Next button available, navigating to next page via URL...');
-  
-  // Use URL-based navigation instead of clicking (more reliable)
+  // Use URL-based navigation (more reliable than clicking)
   const currentUrl = window.location.href;
   let nextPageUrl;
   
@@ -478,24 +714,15 @@ async function goToNextPage() {
     }
   } else {
     // No page parameter (page 1), add page=2
-    if (currentUrl.includes('?')) {
-      // Has query params, add page parameter
-      nextPageUrl = currentUrl.replace(/\?/, '?page=2&');
-    } else {
-      // No query params, add page as first param
-      nextPageUrl = currentUrl + '?page=2';
-    }
+    const separator = currentUrl.includes('?') ? '&' : '?';
+    nextPageUrl = currentUrl + separator + 'page=2';
     console.log('📄 Adding page=2 parameter for navigation');
   }
   
-  console.log('🔗 Current URL:', currentUrl);
-  console.log('🔗 Next URL:', nextPageUrl);
+  console.log('🔗 Navigating to:', nextPageUrl);
   
-  // Navigate to next page
+  // Navigate to next page (page will reload and auto-resume scraping)
   window.location.href = nextPageUrl;
-  
-  // Return true to indicate navigation started (page will reload)
-  return true;
 }
 
 // ==================== EXPORT TO CSV ====================
@@ -555,9 +782,23 @@ function updateButtonState(text, isLoading) {
   }
 }
 
-// ==================== UTILITY: DELAY ====================
+// ==================== UTILITY: RANDOM DELAY (HUMAN-LIKE) ====================
+function randomDelay(config) {
+  // If config is a number, use it directly (backward compatibility)
+  if (typeof config === 'number') {
+    return new Promise(resolve => setTimeout(resolve, config));
+  }
+  
+  // If config is an object with min/max, randomize
+  const { min, max } = config;
+  const randomMs = Math.floor(Math.random() * (max - min + 1)) + min;
+  console.log(`   ⏱️  Waiting ${(randomMs/1000).toFixed(2)}s (human-like delay)`);
+  return new Promise(resolve => setTimeout(resolve, randomMs));
+}
+
+// Alias for backward compatibility
 function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return randomDelay(ms);
 }
 
 // ==================== INITIALIZE ON LOAD ====================
