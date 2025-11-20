@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkedIn Sales Nav Scraper</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 380px;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #f8f9fa;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #0a66c2 0%, #004182 100%);
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
+    
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .header p {
+      font-size: 13px;
+      opacity: 0.9;
+    }
+    
+    .content {
+      padding: 20px;
+    }
+    
+    .status-card {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #d1fae5;
+      color: #065f46;
+      padding: 6px 12px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .status-badge::before {
+      content: '●';
+      color: #10b981;
+    }
+    
+    .instructions {
+      background: white;
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .instructions h2 {
+      font-size: 15px;
+      color: #1f2937;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    
+    .instructions ol {
+      padding-left: 20px;
+      color: #4b5563;
+    }
+    
+    .instructions li {
+      margin-bottom: 10px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    
+    .instructions li strong {
+      color: #0a66c2;
+      font-weight: 600;
+    }
+    
+    .tip-box {
+      background: #eff6ff;
+      border-left: 3px solid #0a66c2;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 16px;
+    }
+    
+    .tip-box .tip-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0a66c2;
+      margin-bottom: 6px;
+    }
+    
+    .tip-box p {
+      font-size: 12px;
+      color: #1e3a8a;
+      line-height: 1.5;
+    }
+    
+    .footer {
+      padding: 16px 20px;
+      text-align: center;
+      border-top: 1px solid #e5e7eb;
+      background: white;
+    }
+    
+    .footer-text {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    
+    .version {
+      display: inline-block;
+      background: #f3f4f6;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      color: #6b7280;
+      margin-top: 6px;
+    }
+
+    .features {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    .features h3 {
+      font-size: 14px;
+      color: #1f2937;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    .feature-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .feature-list li {
+      font-size: 12px;
+      color: #4b5563;
+      padding: 6px 0;
+      padding-left: 24px;
+      position: relative;
+    }
+
+    .feature-list li::before {
+      content: '✓';
+      position: absolute;
+      left: 0;
+      color: #10b981;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📥 Sales Nav Scraper</h1>
+    <p>Extract leads from LinkedIn Sales Navigator</p>
+  </div>
+  
+  <div class="content">
+    <div class="status-card">
+      <span class="status-badge">Extension Active</span>
+    </div>
+
+    <div class="features">
+      <h3>What Gets Scraped</h3>
+      <ul class="feature-list">
+        <li>Name, Job Title, Company</li>
+        <li>Location & Connections</li>
+        <li>Time in Role/Company</li>
+        <li>Sales Navigator URLs</li>
+        <li>Ready for email enrichment</li>
+      </ul>
+    </div>
+    
+    <div class="instructions">
+      <h2>🚀 How to Use</h2>
+      <ol>
+        <li>Go to <strong>LinkedIn Sales Navigator</strong> and perform a search</li>
+        <li>Look for the blue <strong>"📥 Scrape Leads to CSV"</strong> button in the top-right corner</li>
+        <li>Click the button and confirm</li>
+        <li>Wait for scraping to complete (it handles pagination automatically)</li>
+        <li>CSV file will download automatically when finished</li>
+      </ol>
+      
+      <div class="tip-box">
+        <div class="tip-title">💡 Pro Tip</div>
+        <p>Keep the browser tab open during scraping. The extension runs entirely in your browser using your LinkedIn session - zero ban risk!</p>
+      </div>
+    </div>
+  </div>
+  
+  <div class="footer">
+    <div class="footer-text">
+      Client-side scraping for maximum safety
+    </div>
+    <div class="version">v1.0.0</div>
+  </div>
+</body>
+</html>
+
